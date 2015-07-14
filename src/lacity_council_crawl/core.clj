@@ -1,5 +1,5 @@
-(ns city-council-scraper.core
-  (:require [city-council-scraper.scrape :as scrape])
+(ns lacity-council-crawl.core
+  (:require [lacity-council-crawl.scrape :as scrape])
   (:require [clojure.java.jdbc :as sql])
   (:require [clj-http.client :as client])
   (:require [clj-time.coerce])
@@ -47,7 +47,7 @@
   (log/info "Attempting to store vote data" data)
   (when data
     (let [vote-id (:id data)]
-      (sql/insert! db :vote {:id vote-id 
+      (sql/insert! db :vote {:id vote-id
                              :agenda (:agenda-item data)
                              :date (clj-time.coerce/to-long (:date data))
                              :type (name (:type data))

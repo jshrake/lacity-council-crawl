@@ -1,4 +1,4 @@
-(ns city-council-scraper.scrape
+(ns lacity-council-crawl.scrape
   (:require [net.cgrand.enlive-html :as html])
   (:require [clj-time.format])
   (:gen-class))
@@ -15,7 +15,7 @@
   "Returns an enlive selector for selecting the nth column of a table"
   [:td (html/nth-child n)])
 
-(def meeting-date-selector 
+(def meeting-date-selector
   "Unique enlive DOM selector for the vote-details-html meeting date"
 ;.tablebg > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2)
   [:.tablebg [:table (html/nth-child 1)] (nth-row 1) (nth-row 2) (nth-row 1) (nth-col 2)])
@@ -69,13 +69,13 @@
 (def parse-pertinent-districts
   "Parses the pertinent districts string to a list of ints.
    Specifically converts comma-delimited string: 'CD1,CD11,CD5' -> '(1 11 5)"
-  (comp 
+  (comp
    (partial map to-int)
    (partial filter #(not= "none" (clojure.string/lower-case %)))
    (partial map clojure.string/trim)
    #(clojure.string/split % #",")))
 
-(def parse-file-numbers 
+(def parse-file-numbers
   (comp
     (partial map clojure.string/trim)
     #(clojure.string/split % #",")))
@@ -125,4 +125,3 @@
     (#(when (vote-exists? %) %))
     extract-data
     (#(assoc % :id id))))
-    

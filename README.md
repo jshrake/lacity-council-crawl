@@ -1,16 +1,16 @@
-# city-council-scraper
+# lacity-council-crawl
 
-FIXME: description
+A crawler and scraper for LA City Council Voting data
 
 ## Installation
 
-Download from http://example.com/FIXME.
+Download from https://github.com/jshrake/lacity-council-crawl
 
 ## Usage
 
 FIXME: explanation
 
-    $ java -jar city-council-scraper-0.1.0-standalone.jar [args]
+    $ java -jar lacity-council-crawl-0.1.0-standalone.jar [args]
 
 ## Options
 
@@ -24,13 +24,6 @@ FIXME: listing of options this app accepts.
 
 ...
 
-### Any Other Sections
-### That You Think
-### Might be Useful
-
 ## License
 
-Copyright © 2015 FIXME
-
-Distributed under the Eclipse Public License either version 1.0 or (at
-your option) any later version.
+MIT
