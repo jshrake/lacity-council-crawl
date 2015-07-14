@@ -1,99 +1,111 @@
 (ns city-council-scraper.core
   (:require [city-council-scraper.scrape :as scrape])
-  (:require [net.cgrand.enlive-html :as html])
-  (:require [clj-time.format])
+  (:require [clojure.java.jdbc :as sql])
+  (:require [clj-http.client :as client])
+  (:require [clj-time.coerce])
   (:gen-class))
 
+(def dev-db
+  {:classname "org.sqlite.JDBC"
+   :subprotocol "sqlite"
+   :subname "db/votes.sqlite3"})
 
-;; crawling juice
-;; 0. determine the maximum vote id
-;; this can be done by performing a binary search on the votedetails resource of the cityclerk.lacity.org host
-;; when fetching an id that dosn't exist, the server returns a response header that contains server_error: true
-;; the maximum vote id is between 1 and n (for some large n, n ~ 1 billion)
-;; to find it, fetch urls and binary search until you find the largest url that doesn't return a server error
-;; this should happen in no more than log_2 (n) requests (n ~ 1 billion, this is ~30 requests)
+(def production-db
+  {:classname "org.sqlite.JDBC"
+   :subprotocol "sqlite"
+   :subname "db/votes.sqlite3"})
 
-;; once we've acquired the maximum vote id m, we want to ensure we've scraped all vote ids between 1 and m
-;; take a set difference between (set (range 1 m)) and the votes in our databse -- these are the new votes to fetch
-
-;; for each vote to fetch
-;; fetch it -> process it -> store it in our db
-;; delay by amount specified in robots.txt (10 seconds)
-
-;; this process can go on indefinitely (perhaps with delays of 5-10 minutes between cycles)
-;;
-
-(def robots-txt-delay 1)
+(def db dev-db)
+(def robots-txt-delay 10000)
 (def crawl-pause 5000)
 (def initial-vote-id 1)
-(def impossibly-large-vote-id 1000000000)
+(def max-drift 100)
 
-(defn vote-exists?
-  "Determine if a given vote-id exists by fetching the html resource.
-  If the vote does not exist, the response header will contain server_error: true
-  otherwise, the vote exists"
-  ; TODO (jshrake): implement
-  [vote-id] (< vote-id 85000))
-
-(defn find-max-vote
-  "Binary search to find the most recent vote id on cityclerk.lacity.org.
-  Note that this function needs to obey the crawl delay from robots.txt"
-  [min-vote-id max-vote-id]
-  (let [curr-min min-vote-id
-        curr-max max-vote-id
-        curr (int (/ (+ max-vote-id min-vote-id) 2))
-        curr-exists? (vote-exists? curr)]
-    (Thread/sleep robots-txt-delay)
-    (cond
-      (= (- curr-max curr-min) 1) curr-min
-      curr-exists? (recur curr curr-max)
-      (not curr-exists?) (recur curr-min curr))))
-
-
-(defn all-votes
-  "Returns a set of vote ids that exist on cityclerk.lacity.org.
-  Assumes that the vote ids are contiguous between 1 and N"
-  []
-  (set (range 1 (find-max-vote initial-vote-id impossibly-large-vote-id))))
-
-(defn seen-votes
-  "Returns a set of vote ids that exist in the database.
-  This is a subset of all-votes"
-  ; TODO (jshrake): implement
-  []
-  (set (range initial-vote-id 84500)))
-
-(defn unseen-votes
-  "Returns a set of vote ids that exist on cityclerk.lacity.org
-  but do not exist within our databse"
-  [all seen]
-  (clojure.set/difference all seen))
+(defn max-vote-seen
+  "Returns the largest vote id that exists in the database"
+  [db]
+  (let [result (sql/query db ["select max(id) as maxid from vote"])]
+    (or (:maxid (first result)) initial-vote-id)))
 
 (defn delayed-call
   "Call func with args after delay-time. This is blocking!"
   [delay-time func & args]
   (Thread/sleep delay-time)
-  (func args))
+  (apply func args))
 
-(defn crawl
-  [votes craw-delay]
-  (let [delayed-fetch (partial delayed-call craw-delay scrape/fetch-vote-html)]
-    (map (comp scrape/extract-vote-data delayed-fetch) votes)))
+(defn store-council-member [db id nom district]
+  (try (sql/insert! db :council_member {:id id :name nom :district district})
+    (catch Exception e)))
+
+(defn store-council-member-vote [db council-id vote-id outcome]
+  (sql/insert! db :council_member_vote {:council_member_id council-id :vote_id vote-id :outcome outcome}))
 
 (defn store
-  ; TODO (jshrake): implement
-  [data]
-  (println "Storing data:" data)
-  true)
+  [db data]
+  (when data
+    (println "******************")
+    (println "Storing data" data)
+    (sql/insert! db :vote {:id (:id data)
+                           :agenda (:agenda-item data)
+                           :date (clj-time.coerce/to-long (:date data))
+                           :type (name (:type data))
+                           :description (:description data)
+                           :file (:file-number data)})
+    (doseq
+      [vote (:votes data)]
+      (let [nom (:name vote)
+            district (:district vote)
+            outcome (name (:vote vote))
+            unique_id (hash-combine district nom)]
+        (store-council-member db unique_id nom district)
+        (store-council-member-vote db unique_id (:id data) outcome)))
+    (doseq
+      [district (:pertinent-districts data)]
+      (sql/insert! db :impacted_district {:vote_id (:id data) :district district}))))
+
+
+(defn ensure-table
+  [database table-name & specs]
+  (try (sql/db-do-commands database
+                           (apply sql/create-table-ddl table-name specs))
+       (catch Exception e (println e))))
 
 (defn -main
   "I crawl unseen city council votes"
   [& args]
+  (ensure-table db :council_member
+                [:id :int :primary :key]
+                [:name :text]
+                [:district :int]
+                ["UNIQUE (name, district)"])
+
+  (ensure-table db :vote
+                [:id :int :primary :key]
+                [:agenda :text]
+                [:date :int]
+                [:type :text]
+                [:description :text]
+                [:file :text])
+
+  (ensure-table db :council_member_vote
+                [:id :int :primary :key]
+                [:council_member_id :int :references "council_member (id)"]
+                [:vote_id :int :references "vote (id)"]
+                [:outcome :text])
+
+  (ensure-table db :impacted_district
+                [:id :int :primary :key]
+                [:vote_id :int :references "vote (id)"]
+                [:district :int])
+  (println "Crawler starting to crawl")
   (while true
-    (println "Crawler starting to crawl")
-    (let [all (all-votes)
-          seen (seen-votes) ;needs db credentials
-          unseen (unseen-votes all seen)]
-    (doseq [data (crawl unseen robots-txt-delay)] (store data)) ; call to store needs db credentials
-    (println "Crawler sleeping for" (/ crawl-pause 1000) "seconds")
-    (Thread/sleep crawl-pause))))
+    (let [max-seen (max-vote-seen db)
+          begin (+ max-seen 1)
+          end (+ max-seen max-drift)]
+      (println "Crawling from" begin "to" end)
+      (doseq [vote (range begin end)]
+        (-> vote
+          ((partial delayed-call robots-txt-delay scrape/fetch-vote))
+          ((partial store db)))))
+      (println "Crawler sleeping for" (/ crawl-pause 1000) "seconds")
+      (Thread/sleep crawl-pause)))

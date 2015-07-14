@@ -15,7 +15,6 @@
   "Returns the enlive parsed html for a specific city council vote"
   (fetch-url (vote-details-url vote-id)))
 
-
 ;; We define some selectors for extracting specific data from the vote-details page
 ;; The selectors are hand constructed from the firefox inspector developer tool
 
@@ -35,12 +34,17 @@
 (def meeting-type-selector
   "Unique enlive DOM selector for the vote-details-html meeting type"
 ;.tablebg > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(2)
- [[:table (html/nth-child 1)] (nth-row 1) (nth-row 2) (nth-row 2) (nth-col 2)])
+  [[:table (html/nth-child 1)] (nth-row 1) (nth-row 2) (nth-row 2) (nth-col 2)])
 
 (def council-file-number-selector
   "Unique enlive DOM selector for the vote-details-html council file number"
 ;.tablebg > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(10) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2)
   [[:table (html/nth-child 1)] (nth-row 1) (nth-row 10) (nth-row 1) (nth-col 2)])
+
+(def agenda-item-number-selector
+  "Unique enlive DOM selector for the vote-details-html agenda item number"
+;.tablebg > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(6) > td:nth-child(1) > table:nth-child(1) > tbody:nth-child(1) > tr:nth-child(1) > td:nth-child(2)
+  [[:table (html/nth-child 1)] (nth-row 1) (nth-row 6) (nth-row 1) (nth-col 2)])
 
 (def item-description-selector
   "Unique enlive DOM selector for the vote-details-html council file number"
@@ -70,37 +74,51 @@
   (clj-time.format/formatter "EEEE MMMM dd, yyyy"))
 
 (defn to-int [s]
+  "A little helper function to parse an int from a string"
   (Integer. (re-find #"\d+" s)))
 
 (def parse-pertinent-districts
   "Parses the pertinent districts string to a list of ints.
    Specifically converts comma-delimited string: 'CD1,CD11,CD5' -> '(1 11 5)"
   (comp 
-    (partial map to-int)
-    (partial filter #(not= "none" (clojure.string/lower-case %)))
-    (partial map clojure.string/trim)
-    #(clojure.string/split % #",")))
+   (partial map to-int)
+   (partial filter #(not= "none" (clojure.string/lower-case %)))
+   (partial map clojure.string/trim)
+   #(clojure.string/split % #",")))
 
 (defn extract-data [node]
+  "Returns a map of the desired data from the vote-details-html"
   (let [s (partial select-first node)
         voter-names (map (comp clojure.string/lower-case html/text) (html/select node voter-names-selector))
         voter-districts (map (comp to-int html/text) (html/select node voter-districts-selector))
         voter-votes (map (comp keyword clojure.string/lower-case clojure.string/trim html/text) (html/select node voter-votes-selector))
         voter-data (map list voter-names voter-districts voter-votes)]
-  {:date (clj-time.format/parse meeting-date-formatter (s meeting-date-selector))
-   :type (keyword (clojure.string/lower-case(s meeting-type-selector)))
-   :file-number (s council-file-number-selector)
-   :description (s item-description-selector)
-   :pertinent-districts (parse-pertinent-districts (s pertinent-district-selector))
-   :votes (map (partial zipmap [:name :district :vote]) voter-data)}))
+      {:date (clj-time.format/parse meeting-date-formatter (s meeting-date-selector))
+       :type (keyword (clojure.string/lower-case (s meeting-type-selector)))
+       :agenda-item (s agenda-item-number-selector)
+       :file-number (s council-file-number-selector)
+       :description (s item-description-selector)
+       :pertinent-districts (parse-pertinent-districts (s pertinent-district-selector))
+       :votes (map (partial zipmap [:name :district :vote]) voter-data)}))
 
-(defn fetch-vote-html
-  [id]
-  (println "Fetching vote html for vote-id:" id)
-  id)
+(defn vote-exists?
+  "Determine if a given vote-id exists by
+  checking if the html title contains the string error"
+  [node]
+  (-> node
+    (#(html/select % [:title]))
+    first
+    html/text
+    ((partial re-find #"(?i)error"))
+    nil?))
 
-(defn extract-vote-data
-  [id]
-  (println "Fetching vote-id:" id)
-  id)
-
+(defn fetch-vote [id]
+  "Returns the extracted data map for the vote id
+  or nil if the vote does not exist"
+  (println "Fetching vote" id)
+  (some-> id
+    vote-details-html
+    (#(when (vote-exists? %) %))
+    extract-data
+    (#(assoc % :id id))))
+    
