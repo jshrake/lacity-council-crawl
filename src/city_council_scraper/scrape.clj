@@ -3,17 +3,6 @@
   (:require [clj-time.format])
   (:gen-class))
 
-(defn fetch-url [url]
-  "Fetches the enlive parsed html corresponding to the url"
-  (html/html-resource (java.net.URL. url)))
-
-(defn vote-details-url [vote-id]
-  "Returns the url for a specific city council vote"
-  (str "http://cityclerk.lacity.org/cvvs/search/votedetails.cfm?voteid=" vote-id))
-
-(defn vote-details-html [vote-id]
-  "Returns the enlive parsed html for a specific city council vote"
-  (fetch-url (vote-details-url vote-id)))
 
 ;; We define some selectors for extracting specific data from the vote-details page
 ;; The selectors are hand constructed from the firefox inspector developer tool
@@ -86,6 +75,11 @@
    (partial map clojure.string/trim)
    #(clojure.string/split % #",")))
 
+(def parse-file-numbers 
+  (comp
+    (partial map clojure.string/trim)
+    #(clojure.string/split % #",")))
+
 (defn extract-data [node]
   "Returns a map of the desired data from the vote-details-html"
   (let [s (partial select-first node)
@@ -96,15 +90,26 @@
       {:date (clj-time.format/parse meeting-date-formatter (s meeting-date-selector))
        :type (keyword (clojure.string/lower-case (s meeting-type-selector)))
        :agenda-item (s agenda-item-number-selector)
-       :file-number (s council-file-number-selector)
+       :file-numbers (parse-file-numbers (s council-file-number-selector))
        :description (s item-description-selector)
        :pertinent-districts (parse-pertinent-districts (s pertinent-district-selector))
        :votes (map (partial zipmap [:name :district :vote]) voter-data)}))
 
-(defn vote-exists?
+(defn fetch-url [url]
+  "Fetches the enlive parsed html corresponding to the url"
+  (html/html-resource (java.net.URL. url)))
+
+(defn vote-details-url [vote-id]
+  "Returns the url for a specific city council vote"
+  (str "http://cityclerk.lacity.org/cvvs/search/votedetails.cfm?voteid=" vote-id))
+
+(defn vote-details-html [vote-id]
+  "Returns the enlive parsed html for a specific city council vote"
+  (fetch-url (vote-details-url vote-id)))
+
+(defn vote-exists? [node]
   "Determine if a given vote-id exists by
   checking if the html title contains the string error"
-  [node]
   (-> node
     (#(html/select % [:title]))
     first
@@ -115,7 +120,6 @@
 (defn fetch-vote [id]
   "Returns the extracted data map for the vote id
   or nil if the vote does not exist"
-  (println "Fetching vote" id)
   (some-> id
     vote-details-html
     (#(when (vote-exists? %) %))

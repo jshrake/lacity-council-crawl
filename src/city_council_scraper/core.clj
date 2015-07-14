@@ -3,6 +3,7 @@
   (:require [clojure.java.jdbc :as sql])
   (:require [clj-http.client :as client])
   (:require [clj-time.coerce])
+  (:require [clojure.tools.logging :as log])
   (:gen-class))
 
 (def dev-db
@@ -16,13 +17,14 @@
    :subname "db/votes.sqlite3"})
 
 (def db dev-db)
-(def robots-txt-delay 10000)
-(def crawl-pause 5000)
-(def initial-vote-id 1)
+(def robots-txt-delay 10000) ; in ms, see: http://lacity.org/robots.txt
+(def crawl-pause 5000) ; in ms
+(def initial-vote-id 0)
 (def max-drift 100)
 
 (defn max-vote-seen
-  "Returns the largest vote id that exists in the database"
+  "Returns the largest vote id that exists in the database
+  or initial-vote-id if the database is empty"
   [db]
   (let [result (sql/query db ["select max(id) as maxid from vote"])]
     (or (:maxid (first result)) initial-vote-id)))
@@ -42,27 +44,33 @@
 
 (defn store
   [db data]
+  (log/info "Attempting to store vote data" data)
   (when data
-    (println "******************")
-    (println "Storing data" data)
-    (sql/insert! db :vote {:id (:id data)
-                           :agenda (:agenda-item data)
-                           :date (clj-time.coerce/to-long (:date data))
-                           :type (name (:type data))
-                           :description (:description data)
-                           :file (:file-number data)})
-    (doseq
-      [vote (:votes data)]
-      (let [nom (:name vote)
-            district (:district vote)
-            outcome (name (:vote vote))
-            unique_id (hash-combine district nom)]
-        (store-council-member db unique_id nom district)
-        (store-council-member-vote db unique_id (:id data) outcome)))
-    (doseq
-      [district (:pertinent-districts data)]
-      (sql/insert! db :impacted_district {:vote_id (:id data) :district district}))))
+    (let [vote-id (:id data)]
+      (sql/insert! db :vote {:id vote-id 
+                             :agenda (:agenda-item data)
+                             :date (clj-time.coerce/to-long (:date data))
+                             :type (name (:type data))
+                             :description (:description data)})
+      ; Associate this vote with all file numbers listed
+      (doseq [file (:file-numbers data)]
+        (try (sql/insert! db :council_file {:id file}) (catch Exception e))
+        (sql/insert! db :vote_council_file {:vote_id vote-id :file_id file}))
 
+      ; Associate this vote with all council districts listed
+      (doseq
+        [district (:pertinent-districts data)]
+        (sql/insert! db :impacted_district {:vote_id vote-id :district district}))
+
+      ; Associate this vote with all city counciles and their vote
+      (doseq
+        [vote (:votes data)]
+        (let [nom (:name vote)
+              district (:district vote)
+              outcome (name (:vote vote))
+              unique-id (hash-combine district nom)]
+          (store-council-member db unique-id nom district)
+          (store-council-member-vote db unique-id vote-id outcome))))))
 
 (defn ensure-table
   [database table-name & specs]
@@ -73,6 +81,7 @@
 (defn -main
   "I crawl unseen city council votes"
   [& args]
+  (log/info "LA City Council Vote Scraper is online!")
   (ensure-table db :council_member
                 [:id :int :primary :key]
                 [:name :text]
@@ -84,8 +93,7 @@
                 [:agenda :text]
                 [:date :int]
                 [:type :text]
-                [:description :text]
-                [:file :text])
+                [:description :text])
 
   (ensure-table db :council_member_vote
                 [:id :int :primary :key]
@@ -97,15 +105,23 @@
                 [:id :int :primary :key]
                 [:vote_id :int :references "vote (id)"]
                 [:district :int])
-  (println "Crawler starting to crawl")
+
+  (ensure-table db :council_file
+                [:id :text :primary :key])
+
+  (ensure-table db :vote_council_file
+                [:id :int :primary :key]
+                [:vote_id :int :references "vote (id)"]
+                [:file_id :text :references "council_file (id)"])
   (while true
     (let [max-seen (max-vote-seen db)
           begin (+ max-seen 1)
           end (+ max-seen max-drift)]
-      (println "Crawling from" begin "to" end)
       (doseq [vote (range begin end)]
+        (log/info "Fetching vote id" vote)
         (-> vote
           ((partial delayed-call robots-txt-delay scrape/fetch-vote))
           ((partial store db)))))
-      (println "Crawler sleeping for" (/ crawl-pause 1000) "seconds")
-      (Thread/sleep crawl-pause)))
+      (log/info "Crawler sleeping for" (/ crawl-pause 1000) "seconds")
+      (Thread/sleep crawl-pause))
+  (log/info "LA City Council Vote Scraper is shutting down!"))
