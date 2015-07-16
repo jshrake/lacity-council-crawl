@@ -4,19 +4,14 @@
   (:require [clj-http.client :as client])
   (:require [clj-time.coerce])
   (:require [clojure.tools.logging :as log])
+  (:require [environ.core :as environ])
+  (:require [carica.core :as carica])
   (:gen-class))
 
-(def dev-db
-  {:classname "org.sqlite.JDBC"
-   :subprotocol "sqlite"
-   :subname "db/votes.sqlite3"})
+(def config (carica/configurer (carica/resources (environ/env :config))))
+(def override-config (carica/overrider config))
 
-(def production-db
-  {:classname "org.sqlite.JDBC"
-   :subprotocol "sqlite"
-   :subname "db/votes.sqlite3"})
-
-(def db dev-db)
+(def db (config :db))
 (def robots-txt-delay 10000) ; in ms, see: http://lacity.org/robots.txt
 (def crawl-pause 5000) ; in ms
 (def initial-vote-id 0)
@@ -83,7 +78,7 @@
   [& args]
   (log/info "LA City Council Vote Scraper is online!")
   (ensure-table db :council_member
-                [:id :int :primary :key]
+                [:id :bigint :primary :key]
                 [:name :text]
                 [:district :int]
                 ["UNIQUE (name, district)"])
@@ -91,18 +86,18 @@
   (ensure-table db :vote
                 [:id :int :primary :key]
                 [:agenda :text]
-                [:date :int]
+                [:date :bigint]
                 [:type :text]
                 [:description :text])
 
   (ensure-table db :council_member_vote
-                [:id :int :primary :key]
-                [:council_member_id :int :references "council_member (id)"]
+                [:id :serial :primary :key]
+                [:council_member_id :bigint :references "council_member (id)"]
                 [:vote_id :int :references "vote (id)"]
                 [:outcome :text])
 
   (ensure-table db :impacted_district
-                [:id :int :primary :key]
+                [:id :serial :primary :key]
                 [:vote_id :int :references "vote (id)"]
                 [:district :int])
 
@@ -110,7 +105,7 @@
                 [:id :text :primary :key])
 
   (ensure-table db :vote_council_file
-                [:id :int :primary :key]
+                [:id :serial :primary :key]
                 [:vote_id :int :references "vote (id)"]
                 [:file_id :text :references "council_file (id)"])
   (while true
