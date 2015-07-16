@@ -11,3 +11,8 @@ pom.xml.asc
 .hg/
 db
 resources/production_config.edn
+
+# Elastic Beanstalk Files
+.elasticbeanstalk/*
+!.elasticbeanstalk/*.cfg.yml
+!.elasticbeanstalk/*.global.yml
